@@ -4,6 +4,7 @@ import dotenv from 'dotenv';
 import cron from 'node-cron';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import fs from 'fs';
 
 import { initDatabase, getDb } from './db/database.js';
 import metaRoutes from './routes/meta.js';
@@ -21,66 +22,49 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// Middleware
 app.use(cors());
 app.use(express.json());
 
-// Initialize database
 initDatabase();
 
-// API Routes
 app.use('/api/meta', metaRoutes);
 app.use('/api/salla', sallaRoutes);
 app.use('/api/manual', manualRoutes);
 app.use('/api/analytics', analyticsRoutes);
 
-// Health check
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-// Sync endpoint (manual trigger)
 app.post('/api/sync', async (req, res) => {
   try {
-    console.log('Starting manual sync...');
-    
     const metaResult = await syncMetaData();
     const sallaResult = await syncSallaData();
-    
-    res.json({
-      success: true,
-      meta: metaResult,
-      salla: sallaResult,
-      syncedAt: new Date().toISOString()
-    });
+    res.json({ success: true, meta: metaResult, salla: sallaResult, syncedAt: new Date().toISOString() });
   } catch (error) {
-    console.error('Sync error:', error);
     res.status(500).json({ error: error.message });
   }
 });
 
-// Serve static files in production
-if (process.env.NODE_ENV === 'production') {
-  app.use(express.static(path.join(__dirname, '../client/dist')));
-  
+const clientDistPath = path.join(__dirname, '../client/dist');
+if (fs.existsSync(clientDistPath)) {
+  app.use(express.static(clientDistPath));
   app.get('*', (req, res) => {
-    res.sendFile(path.join(__dirname, '../client/dist/index.html'));
+    if (req.path.startsWith('/api')) return res.status(404).json({ error: 'Not found' });
+    res.sendFile(path.join(clientDistPath, 'index.html'));
+  });
+} else {
+  app.get('/', (req, res) => {
+    res.json({ message: 'VironaX API running', note: 'Client build not found' });
   });
 }
 
-// Scheduled sync (every day at 8 AM UTC)
-cron.schedule('0 8 * * *', async () => {
-  console.log('Running scheduled sync...');
-  try {
-    await syncMetaData();
-    await syncSallaData();
-    console.log('Scheduled sync completed');
-  } catch (error) {
-    console.error('Scheduled sync failed:', error);
-  }
+cron.schedule('0 * * * *', async () => {
+  try { await syncMetaData(); await syncSallaData(); } catch (e) { console.error(e); }
 });
 
-app.listen(PORT, () => {
-  console.log(`✅ Server running on port ${PORT}`);
-  console.log(`📊 Dashboard API ready`);
-});
+setTimeout(async () => {
+  try { await syncMetaData(); await syncSallaData(); } catch (e) { console.error(e); }
+}, 5000);
+
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
